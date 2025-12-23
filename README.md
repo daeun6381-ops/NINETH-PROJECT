@@ -133,7 +133,7 @@
         let activeCode = localStorage.getItem('active_room_code');
         let tempBase64 = null;
 
-        // 2. 전역 함수 설정 (HTML에서 접근 가능하도록 window 객체에 할당)
+        // 2. 전역 함수 설정 (함수 선언 순서 중요 - HTML 호출 대비)
         window.showStep = (step) => {
             document.getElementById('setup-step-1').classList.add('hidden');
             document.getElementById('setup-step-join').classList.add('hidden');
@@ -150,7 +150,10 @@
         };
 
         window.handleCreateCode = async () => {
-            if(!user) return;
+            if(!user) {
+                alert("인증 중입니다. 잠시만 기다려주세요.");
+                return;
+            }
             const code = Math.random().toString(36).substring(2, 8).toUpperCase();
             document.getElementById('generated-code-display').innerText = code;
             window.showStep('wait');
@@ -275,25 +278,20 @@
             }
         };
 
-        // 3. 앱 실행 로직
-        onAuthStateChanged(auth, (u) => {
-            if (u) {
-                user = u;
-                if (activeCode) startApp(activeCode);
-            }
-        });
-        signInAnonymously(auth);
-
-        function startApp(code) {
+        // 3. 앱 초기화 및 실행 로직
+        const startApp = (code) => {
+            // 연결 화면 숨기기
             document.getElementById('connection-screen').classList.add('hidden');
+            
             const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', code);
             const diaryCol = collection(db, 'artifacts', appId, 'public', 'data', 'diaries_' + code);
 
+            // 방 정보 실시간 구독
             onSnapshot(roomRef, (snap) => {
                 const d = snap.data();
                 if(!d) return;
 
-                // D-Day
+                // D-Day 계산
                 const start = new Date(d.startDate);
                 const today = new Date();
                 today.setHours(0,0,0,0); start.setHours(0,0,0,0);
@@ -301,21 +299,24 @@
                 document.getElementById('d-day-display').innerText = `함께한 지 ${days}일`;
                 document.getElementById('set-date').value = d.startDate;
 
-                // Nicks
+                // 별명 표시
                 const partnerId = d.host === user.uid ? d.guest : d.host;
                 document.getElementById('nick-me').innerText = d.nicks[user.uid] || '나';
                 document.getElementById('nick-partner').innerText = partnerId ? (d.nicks[partnerId] || '상대방') : '상대방';
                 
+                // 일기 목록 렌더링 시작
                 renderDiaries(diaryCol, d.lastWritten || {}, partnerId);
             });
-        }
+        };
 
-        function renderDiaries(col, lastWritten, partnerId) {
+        const renderDiaries = (col, lastWritten, partnerId) => {
             onSnapshot(col, (snap) => {
                 const list = document.getElementById('diary-list');
                 list.innerHTML = '';
                 const items = [];
-                snap.forEach(d => items.push(d.data()));
+                snap.forEach(d => items.push({ id: d.id, ...d.data() }));
+                
+                // 최신순 정렬
                 items.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 
                 if(items.length === 0) {
@@ -325,7 +326,8 @@
 
                 items.forEach(data => {
                     const isMy = data.author === user.uid;
-                    const isLocked = !isMy && partnerId && (lastWritten[user.uid] !== data.date || lastWritten[partnerId] !== data.date);
+                    // 잠금 로직: 내가 오늘 일기를 쓰지 않았고, 상대방이 일기를 쓴 경우 (교환 일기 규칙)
+                    const isLocked = !isMy && partnerId && (lastWritten[user.uid] !== data.date);
 
                     const div = document.createElement('div');
                     div.className = "bg-white p-6 rounded-3xl shadow-sm border border-slate-50 diary-card";
@@ -347,8 +349,21 @@
                     }
                     list.appendChild(div);
                 });
-            });
-        }
+            }, (err) => console.error("일기 로드 오류:", err));
+        };
+
+        // 4. 인증 처리 (App 시작점)
+        onAuthStateChanged(auth, (u) => {
+            if (u) {
+                user = u;
+                // 인증 완료 후, 연결된 코드가 있으면 앱 실행
+                if (activeCode) {
+                    startApp(activeCode);
+                }
+            } else {
+                signInAnonymously(auth);
+            }
+        });
     </script>
 </body>
 </html>
